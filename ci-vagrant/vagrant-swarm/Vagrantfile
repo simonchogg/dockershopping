@@ -1,0 +1,107 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+
+  $jenkins_ip = "192.168.100.2"
+  $swarmmaster_ip = "192.168.100.10"
+
+  config.vm.define "jenkins" do |jenkins|
+    jenkins.vm.box = "ubuntu/xenial64"
+    jenkins.vm.box_url = "https://atlas.hashicorp.com/ubuntu/boxes/xenial64/versions/20161104.0.0"
+
+    jenkinsmaster_ip = $jenkins_ip
+    swarm_master_ip = $swarmmaster_ip
+
+    jenkins.vm.network "forwarded_port", guest: 8080, host: 8080
+    jenkins.vm.network "private_network", ip: "#{jenkinsmaster_ip}"
+    jenkins.vm.hostname = "jenkins"
+
+    jenkins.vm.provider "virtualbox" do |v|
+      v.memory = 2048
+    end
+
+    jenkins.vm.provision "shell", inline: <<-SHELL
+      apt-get install -y apt-transport-https ca-certificates
+
+      # configure package repos and keys for apt-get installs
+      # sbt
+      apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 2EE0EA64E40A89B84B2DF73499E82A75642AC823
+      echo "deb https://dl.bintray.com/sbt/debian /" >> /etc/apt/sources.list.d/sbt.list
+
+      # docker
+      apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
+      echo "deb https://apt.dockerproject.org/repo ubuntu-xenial main" >> /etc/apt/sources.list.d/docker.list
+
+      # jenkins
+      wget -q -O - https://jenkins-ci.org/debian/jenkins-ci.org.key | apt-key add -
+      echo "deb http://pkg.jenkins-ci.org/debian binary/" >> /etc/apt/sources.list.d/jenkins.list
+
+      # let's get started with the installations!
+      apt-get update
+      apt-get upgrade -y
+
+      apt-get install -y openjdk-8-jdk
+      apt-get install -y maven
+
+      apt-get install sbt
+
+      apt-get install -y linux-image-extra-$(uname -r) linux-image-extra-virtual
+      apt-get install -y docker-engine
+
+      # Add profile script to set env for convenient reference to Docker Swarm Master
+      echo "export DOCKER_SWARM_MASTER=#{swarm_master_ip}" | tee -a /etc/profile.d/dockerswarmenv.sh
+
+      # Install Jenkins
+      apt-get install -y jenkins
+      # Echo the Jenkins security key that is required upon initialisation
+      printf "\n\nJENKINS KEY\n*********************************"
+      # Add the Jenkins user to the Docker group
+      usermod -aG docker jenkins
+      # Wait until the initialAdminPassword file is generated via Jenkins startup
+      while [ ! -f /var/lib/jenkins/secrets/initialAdminPassword ]
+      do
+          sleep 2
+      done
+      cat /var/lib/jenkins/secrets/initialAdminPassword
+      printf "*********************************"
+      # restart the Jenkins service so that the usermod command above takes effect
+      service jenkins restart
+
+      # Install Docker Compose
+      curl -s -L https://github.com/docker/compose/releases/download/1.8.1/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
+      chmod +x /usr/local/bin/docker-compose
+    SHELL
+  end
+
+  config.vm.define "swarm-master" do |swarmmaster|
+    swarmmaster.vm.box = "ubuntu/xenial64"
+    swarmmaster.vm.box_url = "https://atlas.hashicorp.com/ubuntu/boxes/xenial64/versions/20161104.0.0"
+
+    swarm_master_ip = $swarmmaster_ip
+
+    swarmmaster.vm.network "private_network", ip: "#{swarm_master_ip}"
+    swarmmaster.vm.hostname = "swarmmaster"
+
+    swarmmaster.vm.provider "virtualbox" do |v|
+      v.memory = 2048
+    end
+
+    swarmmaster.vm.provision "shell", inline: <<-SHELL
+      apt-get install -y apt-transport-https ca-certificates
+
+      # docker
+      apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
+      echo "deb https://apt.dockerproject.org/repo ubuntu-xenial main" >> /etc/apt/sources.list.d/docker.list
+
+      apt-get update
+      apt-get upgrade -y
+
+      apt-get install -y linux-image-extra-$(uname -r) linux-image-extra-virtual
+      apt-get install -y docker-engine
+
+      docker swarm init --advertise-addr #{swarm_master_ip}
+      docker swarm join-token work -q | tee /vagrant/swarm_work_token
+    SHELL
+  end
+end
