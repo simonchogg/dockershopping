@@ -24,3 +24,6 @@ buildNumber.properties
 
 #logs
 *.log
+
+# custom Docker Swarm
+swarm_work_token
